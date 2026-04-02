@@ -1,0 +1,102 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: products
+    // Document ID: auto-generated
+    // Fields:
+    //   - name: string (required)
+    //   - description: string (optional)
+    //   - price: number (required)
+    //   - imageUrl: string (optional)
+    //   - averageRating: number (optional)
+    //   - reviewCount: number (optional)
+    //
+    // Collection: reviews
+    // Document ID: auto-generated
+    // Fields:
+    //   - productId: string (required)
+    //   - userId: string (required, immutable, must match auth.uid)
+    //   - userName: string (required)
+    //   - rating: number (required, 1-5)
+    //   - text: string (required, max 1000 chars)
+    //   - createdAt: timestamp (required, immutable)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.userId;
+    }
+    
+    function uidUnchanged() {
+      return !('userId' in request.resource.data) || request.resource.data.userId == request.auth.uid;
+    }
+    
+    function uidNotModified() {
+      return !('userId' in request.resource.data) || request.resource.data.userId == resource.data.userId;
+    }
+    
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+    
+    function validStringLength(field, minLen, maxLen) {
+      return request.resource.data[field] is string &&
+        request.resource.data[field].size() >= minLen &&
+        request.resource.data[field].size() <= maxLen;
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+    function isValidReview(data) {
+      return hasRequiredFields(['productId', 'userId', 'userName', 'rating', 'text', 'createdAt']) &&
+             data.productId is string && data.productId.size() > 0 &&
+             data.userId is string && data.userId == request.auth.uid &&
+             data.userName is string && data.userName.size() > 0 && data.userName.size() <= 100 &&
+             data.rating is number && data.rating >= 1 && data.rating <= 5 &&
+             data.text is string && data.text.size() <= 1000 &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidReviewUpdate(data) {
+      return data.productId == resource.data.productId &&
+             data.userId == resource.data.userId &&
+             data.createdAt == resource.data.createdAt &&
+             data.userName is string && data.userName.size() > 0 && data.userName.size() <= 100 &&
+             data.rating is number && data.rating >= 1 && data.rating <= 5 &&
+             data.text is string && data.text.size() <= 1000;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+    
+    match /products/{productId} {
+      allow read: if true; // Publicly readable
+      // Only admins can create/update/delete products. For now, deny all writes.
+      allow write: if false; 
+    }
+
+    match /reviews/{reviewId} {
+      allow read: if true; // Publicly readable
+      allow create: if isAuthenticated() && isValidReview(request.resource.data) && uidUnchanged();
+      allow update: if isDocOwner() && isValidReviewUpdate(request.resource.data) && uidNotModified();
+      allow delete: if isDocOwner();
+    }
+  }
+}
